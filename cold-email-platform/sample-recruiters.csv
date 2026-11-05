@@ -1,0 +1,5 @@
+name,email,company
+Ada Lovelace,ada@example.com,Analytical Engines
+Grace Hopper, GRACE.Hopper@EXAMPLE.COM, US Navy
+Unknown Recruiter,jordan@recruiting.example,Acme Hiring
+invalid-address,not-an-email,Nowhere

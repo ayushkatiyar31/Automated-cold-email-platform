@@ -6,6 +6,8 @@ import { env } from './config/env';
 import { connectDatabase, disconnectDatabase } from './config/db';
 import { logger } from './config/logger';
 import authRoutes from './routes/auth';
+import uploadRoutes from './routes/uploads';
+import recipientRoutes from './routes/recipients';
 import { csrfProtection } from './middleware/csrf';
 import { errorHandler, notFoundHandler } from './middleware/error';
 
@@ -17,6 +19,8 @@ app.use(cookieParser());
 app.use(csrfProtection);
 app.get('/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRoutes);
+app.use('/api/uploads', uploadRoutes);
+app.use('/api/recipients', recipientRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
