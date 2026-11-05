@@ -1,0 +1,13 @@
+import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
+import { login, logout, me, refresh, register, updateProfile } from '../controllers/authController';
+import { requireAuth } from '../middleware/auth';
+const router = Router();
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
+router.post('/register', authLimiter, register);
+router.post('/login', authLimiter, login);
+router.post('/logout', requireAuth, logout);
+router.post('/refresh', authLimiter, refresh);
+router.get('/me', requireAuth, me);
+router.patch('/profile', requireAuth, updateProfile);
+export default router;
