@@ -1,0 +1,2 @@
+export function Spinner(){return <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent"/>;}
+export function Empty({title='Nothing here yet',description='Create an item to get started.'}:{title?:string;description?:string}){return <div className="rounded-xl border border-dashed border-slate-300 p-10 text-center"><h3 className="font-semibold">{title}</h3><p className="mt-1 text-sm text-slate-500">{description}</p></div>;}
