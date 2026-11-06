@@ -10,6 +10,7 @@ import { sendOneEmail } from '../services/sendGmail';
 import { Template } from '../models/Template';
 import { Recipient } from '../models/Recipient';
 import { renderCampaign, validatePlaceholders } from '../services/templateRenderer';
+import { sendCampaign } from '../services/campaignQueue';
 const router = Router();
 router.use(requireAuth);
 
@@ -75,6 +76,37 @@ router.post('/:id/save-as-template', async (req, res, next) => {
     const template = await Template.create({ userId: campaign.userId, name: input.name, subject: campaign.subject, body: campaign.body, resumeLink: campaign.resumeLink, isDefault: input.isDefault ?? false });
     res.status(201).json({ template });
   } catch (error) { next(error); }
+});
+router.post('/:id/launch', async (req, res, next) => {
+  try {
+    const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found');
+    assertOwner(campaign.userId, (req as AuthRequest).user!.id);
+    const user = await User.findById((req as AuthRequest).user!.id).select('+gmail.refreshToken');
+    if (!user?.gmail?.refreshToken) throw new AppError(400, 'Gmail is not connected', 'GMAIL_NOT_CONNECTED');
+    if (!campaign.subject || !campaign.body) throw new AppError(400, 'Campaign subject and body are required', 'CAMPAIGN_INCOMPLETE');
+    const pendingCount = await Recipient.countDocuments({ campaignId: campaign.id, status: 'pending', gmailMessageId: { $exists: false } });
+    if (pendingCount === 0) throw new AppError(400, 'Campaign has no pending recipients', 'NO_PENDING_RECIPIENTS');
+    campaign.status = 'pending'; campaign.pauseReason = undefined; await campaign.save();
+    await Recipient.updateMany({ campaignId: campaign.id, status: { $in: ['failed'] } }, { $unset: { error: 1, errorCode: 1 } });
+    await sendCampaign(campaign.id);
+    res.json({ campaign });
+  } catch (error) { next(error); }
+});
+router.post('/:id/pause', async (req, res, next) => {
+  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'paused'; await campaign.save(); res.json({ campaign }); }
+  catch (error) { next(error); }
+});
+router.post('/:id/resume', async (req, res, next) => {
+  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'pending'; campaign.pauseReason = undefined; await campaign.save(); await sendCampaign(campaign.id); res.json({ campaign }); }
+  catch (error) { next(error); }
+});
+router.post('/:id/cancel', async (req, res, next) => {
+  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'cancelled'; await campaign.save(); await Recipient.updateMany({ campaignId: campaign.id, status: 'pending' }, { $set: { status: 'skipped' } }); res.json({ campaign }); }
+  catch (error) { next(error); }
+});
+router.post('/:id/retry-failed', async (req, res, next) => {
+  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); await Recipient.updateMany({ campaignId: campaign.id, status: 'failed', gmailMessageId: { $exists: false }, errorCode: { $ne: 'PERMANENT' } }, { $set: { status: 'pending', attempts: 0 }, $unset: { error: 1, errorCode: 1 } }); campaign.status = 'pending'; campaign.pauseReason = undefined; await campaign.save(); await sendCampaign(campaign.id); res.json({ campaign }); }
+  catch (error) { next(error); }
 });
 router.post('/:id/preview', async (req, res, next) => {
   try {

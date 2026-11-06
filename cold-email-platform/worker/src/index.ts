@@ -8,6 +8,7 @@ import ExcelJS from 'exceljs';
 import crypto from 'crypto';
 import pino from 'pino';
 import { Upload, Recipient } from './models';
+import { runSendWorker } from './sendWorker';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 const mongoUri = process.env.MONGODB_URI ?? 'mongodb://127.0.0.1:27017/cold_email';
@@ -50,6 +51,7 @@ async function parseAndPersist(stream: Readable, kind: 'csv'|'xlsx'|'pdf', uploa
 
 async function main() {
   await mongoose.connect(mongoUri); logger.info('Worker connected to MongoDB');
+  await runSendWorker();
   const worker = new Worker('file-parsing', async job => {
     const { uploadId } = job.data as { uploadId: string }; const upload = await Upload.findById(uploadId); if (!upload) throw new Error('Upload not found');
     await Upload.updateOne({ _id: uploadId }, { $set: { status: 'processing' } });
