@@ -10,6 +10,7 @@ import uploadRoutes from './routes/uploads';
 import recipientRoutes from './routes/recipients';
 import gmailRoutes from './routes/gmail';
 import campaignRoutes from './routes/campaigns';
+import templateRoutes from './routes/templates';
 import { csrfProtection } from './middleware/csrf';
 import { errorHandler, notFoundHandler } from './middleware/error';
 
@@ -25,6 +26,7 @@ app.use('/api/uploads', uploadRoutes);
 app.use('/api/recipients', recipientRoutes);
 app.use('/api/gmail', gmailRoutes);
 app.use('/api/campaigns', campaignRoutes);
+app.use('/api/templates', templateRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
