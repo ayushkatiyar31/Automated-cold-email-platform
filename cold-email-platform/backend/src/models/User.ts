@@ -4,10 +4,15 @@ import bcrypt from 'bcryptjs';
 export interface IUser extends Document {
   name: string; email: string; passwordHash: string; resumeLink?: string;
   refreshTokenHash?: string; comparePassword(password: string): Promise<boolean>;
+  gmail?: { email?: string; accessToken?: string; refreshToken?: string; expiryDate?: number; connectedAt?: Date };
 }
 const userSchema = new Schema<IUser>({
   name: { type: String, required: true, trim: true }, email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-  passwordHash: { type: String, required: true, select: false }, resumeLink: { type: String, trim: true }, refreshTokenHash: { type: String, select: false }
+  passwordHash: { type: String, required: true, select: false }, resumeLink: { type: String, trim: true }, refreshTokenHash: { type: String, select: false },
+  gmail: {
+    email: String, accessToken: { type: String, select: false }, refreshToken: { type: String, select: false },
+    expiryDate: Number, connectedAt: Date
+  }
 }, { timestamps: true });
 userSchema.methods.comparePassword = function(password: string) { return bcrypt.compare(password, this.passwordHash); };
 export const User = model<IUser>('User', userSchema);
