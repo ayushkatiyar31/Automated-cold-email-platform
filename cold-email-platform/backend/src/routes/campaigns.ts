@@ -11,6 +11,7 @@ import { Template } from '../models/Template';
 import { Recipient } from '../models/Recipient';
 import { renderCampaign, validatePlaceholders } from '../services/templateRenderer';
 import { sendCampaign } from '../services/campaignQueue';
+import { exportRecipients, exportReport } from '../controllers/campaignExportController';
 const router = Router();
 router.use(requireAuth);
 
@@ -56,6 +57,8 @@ router.get('/:id', async (req, res, next) => {
   try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); res.json({ campaign }); }
   catch (error) { next(error); }
 });
+router.get('/:id/export/recipients', exportRecipients);
+router.get('/:id/export/report', exportReport);
 router.patch('/:id', async (req, res, next) => {
   try {
     const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id);
@@ -65,7 +68,15 @@ router.patch('/:id', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 router.delete('/:id', async (req, res, next) => {
-  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); if (campaign.status !== 'draft') throw new AppError(409, 'Only draft campaigns can be deleted', 'CAMPAIGN_NOT_DELETEABLE'); await campaign.deleteOne(); res.status(204).send(); }
+  try {
+    const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id);
+    if (['pending', 'sending'].includes(campaign.status)) throw new AppError(409, 'Running or queued campaigns cannot be deleted', 'CAMPAIGN_ACTIVE');
+    await Promise.all([
+      Recipient.deleteMany({ campaignId: campaign.id }),
+      import('../models/EmailLog').then(({ EmailLog }) => EmailLog.deleteMany({ campaignId: campaign.id }))
+    ]);
+    await campaign.deleteOne(); res.status(204).send();
+  }
   catch (error) { next(error); }
 });
 router.post('/:id/save-as-template', async (req, res, next) => {

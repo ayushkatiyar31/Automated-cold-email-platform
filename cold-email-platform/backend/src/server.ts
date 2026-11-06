@@ -2,6 +2,7 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { env } from './config/env';
 import { connectDatabase, disconnectDatabase } from './config/db';
 import { logger } from './config/logger';
@@ -16,10 +17,19 @@ import { errorHandler, notFoundHandler } from './middleware/error';
 
 const app = express();
 app.use(helmet());
-app.use(cors({ origin: env.frontendUrl, credentials: true, allowedHeaders: ['Content-Type', 'X-Requested-With'] }));
+const writeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: true, legacyHeaders: false });
+app.use(cors({
+  origin(origin, callback) {
+    const allowed = env.frontendUrl.split(',').map(value => value.trim()).filter(Boolean);
+    if (!origin || allowed.includes(origin)) callback(null, true);
+    else callback(new Error('Origin is not allowed by CORS'));
+  },
+  credentials: true, allowedHeaders: ['Content-Type', 'X-Requested-With']
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 app.use(csrfProtection);
+app.use(['/api/campaigns', '/api/templates', '/api/uploads', '/api/recipients'], writeLimiter);
 app.get('/health', (_req, res) => res.json({ ok: true }));
 app.use('/api/auth', authRoutes);
 app.use('/api/uploads', uploadRoutes);
