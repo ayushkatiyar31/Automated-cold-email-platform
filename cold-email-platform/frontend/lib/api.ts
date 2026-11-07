@@ -1,9 +1,14 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
 async function rawRequest(path: string, options: RequestInit = {}, retried = false): Promise<Response> {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options, credentials: 'include',
-    headers: { 'X-Requested-With': 'XMLHttpRequest', ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...options.headers }
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      ...options, credentials: 'include',
+      headers: { 'X-Requested-With': 'XMLHttpRequest', ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...options.headers }
+    });
+  } catch {
+    throw new Error('Unable to reach the server. Please try again.');
+  }
   if (response.status === 401 && !retried && path !== '/api/auth/refresh') {
     const refresh = await rawRequest('/api/auth/refresh', { method: 'POST' }, true);
     if (refresh.ok) return rawRequest(path, options, true);
