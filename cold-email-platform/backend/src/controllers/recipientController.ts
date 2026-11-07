@@ -8,7 +8,7 @@ import { assertOwner, objectId } from '../utils/ownership';
 
 export const listRecipients: RequestHandler = async (req, res, next) => {
   try {
-    const query = z.object({ campaignId: z.string(), page: z.coerce.number().int().positive().default(1), limit: z.coerce.number().int().min(1).max(100).default(20), search: z.string().trim().max(200).optional(), status: z.enum(['pending','sending','sent','failed','skipped']).optional() }).parse(req.query);
+    const query = z.object({ campaignId: z.string(), page: z.coerce.number().int().positive().default(1), limit: z.coerce.number().int().min(1).max(100).default(20), search: z.string().trim().max(200).optional(), status: z.enum(['pending','sending','sent','failed','skipped','invalid']).optional() }).parse(req.query);
     const campaign = await Campaign.findById(objectId(query.campaignId)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id);
     const filter: any = { campaignId: campaign.id }; if (query.search) filter.$or = ['email','name','company'].map(field => ({ [field]: { $regex: query.search, $options: 'i' } }));
     if (query.status) filter.status = query.status;

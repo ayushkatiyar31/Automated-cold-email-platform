@@ -18,20 +18,20 @@ const lowerEmail = (value: unknown) => String(value ?? '').trim().toLowerCase();
 const validEmail = (value: string) => value.length <= 254 && emailPattern.test(value);
 const nameFromEmail = (email: string) => email.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
-type ParsedRow = { email: string; name?: string; company?: string };
+type ParsedRow = { email: string; name?: string; company?: string; invalid?: boolean };
 async function persistBatch(rows: ParsedRow[], campaignId: string, userId: string) {
   const seen = new Map<string, ParsedRow>(); for (const row of rows) seen.set(row.email, row);
   if (!seen.size) return;
   await (Recipient as any).bulkWrite([...seen.values()].map(row => ({
-    updateOne: { filter: { campaignId, email: row.email }, update: { $setOnInsert: { campaignId, userId, email: row.email, name: row.name, company: row.company, status: 'pending', attempts: 0, idempotencyKey: crypto.createHash('sha256').update(`${campaignId}:${row.email}`).digest('hex') } }, upsert: true }
+    updateOne: { filter: { campaignId, email: row.email }, update: { $setOnInsert: { campaignId, userId, email: row.email, name: row.name, company: row.company, status: row.invalid ? 'invalid' : 'pending', error: row.invalid ? 'Invalid email address' : undefined, errorCode: row.invalid ? 'INVALID_EMAIL' : undefined, attempts: 0, idempotencyKey: crypto.createHash('sha256').update(`${campaignId}:${row.email}`).digest('hex') } }, upsert: true }
   })), { ordered: false });
 }
 async function parseAndPersist(stream: Readable, kind: 'csv'|'xlsx'|'pdf', upload: any) {
   const queue: ParsedRow[] = []; let seen = 0;
-  const flush = async () => { await persistBatch(queue.splice(0), String(upload.campaignId), String(upload.userId)); seen += queue.length; };
+  const flush = async () => { const rows = queue.splice(0); await persistBatch(rows, String(upload.campaignId), String(upload.userId)); seen += rows.length; };
   if (kind === 'csv') {
     await new Promise<void>((resolve, reject) => {
-      stream.pipe(csvParse({ columns: true, bom: true, trim: true })).on('data', async row => { if (stream.destroyed) return; const headers = Object.keys(row); const emailKey = headers.find(k => /email/i.test(k)); if (!emailKey) return; const email = lowerEmail(row[emailKey]); if (validEmail(email)) { queue.push({ email, name: row.name?.trim() || undefined, company: row.company?.trim() || undefined }); if (queue.length >= 1000) { stream.pause(); await flush().catch(reject); stream.resume(); } } }).on('error', reject).on('end', resolve);
+      stream.pipe(csvParse({ columns: true, bom: true, trim: true })).on('data', row => { if (stream.destroyed) return; const headers = Object.keys(row); const emailKey = headers.find(k => /email/i.test(k)); if (!emailKey) return; const email = lowerEmail(row[emailKey]); queue.push({ email, name: row.name?.trim() || undefined, company: row.company?.trim() || undefined, invalid: !validEmail(email) }); if (queue.length >= 1000) { stream.pause(); flush().catch(reject).finally(() => stream.resume()); } }).on('error', reject).on('end', resolve);
     });
   } else if (kind === 'xlsx') {
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.read(stream as any);
@@ -60,7 +60,8 @@ async function main() {
       const ext = String(upload.originalName ?? '').toLowerCase().split('.').pop(); await parseAndPersist(stream, ext === 'xlsx' ? 'xlsx' : ext === 'pdf' ? 'pdf' : 'csv', upload);
       await Upload.updateOne({ _id: uploadId }, { $set: { status: 'processed' }, $unset: { error: 1 } });
     } catch (error: any) { await Upload.updateOne({ _id: uploadId }, { $set: { status: 'failed', error: error.message } }); throw error; }
-  }, { connection: { url: redisUrl } as any, concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2) });
+  }, { connection: { url: redisUrl, maxRetriesPerRequest: null } as any, concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2) });
+  worker.on('ready', () => logger.info('Worker started'));
   worker.on('failed', (job, error) => logger.error({ jobId: job?.id, error: error.message }, 'Parsing job failed'));
   const shutdown = async () => { await worker.close(); await mongoose.disconnect(); process.exit(0); }; process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
 }
