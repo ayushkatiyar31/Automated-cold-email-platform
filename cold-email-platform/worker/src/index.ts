@@ -36,10 +36,25 @@ async function parseAndPersist(stream: Readable, kind: 'csv'|'xlsx'|'pdf', uploa
   } else if (kind === 'xlsx') {
     const workbook = new ExcelJS.Workbook(); await workbook.xlsx.read(stream as any);
     const sheet = workbook.worksheets[0]; if (!sheet) throw new Error('Workbook has no worksheets');
-    const headers = sheet.getRow(1).values as unknown[]; const normalized = headers.map(v => String(v ?? '').trim().toLowerCase());
-    const emailIndex = normalized.findIndex(v => /email/.test(v)); const nameIndex = normalized.findIndex(v => /^name$/.test(v)); const companyIndex = normalized.findIndex(v => /company/.test(v));
-    if (emailIndex < 1) throw new Error('Worksheet must contain an email column');
-    sheet.eachRow((row, rowNumber) => { if (rowNumber === 1) return; const email = lowerEmail(row.getCell(emailIndex).text); if (validEmail(email)) queue.push({ email, name: row.getCell(nameIndex).text.trim() || undefined, company: row.getCell(companyIndex).text.trim() || undefined }); });
+    let headerRow = 0; let emailIndex = 0; let nameIndex = 0; let companyIndex = 0;
+    for (let rowNumber = 1; rowNumber <= Math.min(sheet.rowCount, 20); rowNumber++) {
+      const headers = sheet.getRow(rowNumber).values as unknown[];
+      const normalized = headers.map(v => String(v ?? '').trim().toLowerCase());
+      emailIndex = normalized.findIndex(v => /e[- ]?mail|email address/.test(v));
+      if (emailIndex > 0) {
+        headerRow = rowNumber;
+        nameIndex = normalized.findIndex(v => /^(full )?name$/.test(v));
+        companyIndex = normalized.findIndex(v => /company|organization|organisation/.test(v));
+        break;
+      }
+    }
+    if (!headerRow || emailIndex < 1) throw new Error('Worksheet must contain an email column');
+    const cellText = (row: ExcelJS.Row, index: number) => index > 0 ? String(row.getCell(index).text ?? '').trim() : '';
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber <= headerRow) return;
+      const email = lowerEmail(cellText(row, emailIndex));
+      if (validEmail(email)) queue.push({ email, name: cellText(row, nameIndex) || undefined, company: cellText(row, companyIndex) || undefined });
+    });
   } else {
     const chunks: Buffer[]=[]; for await (const chunk of stream) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     const pdf = require('pdf-parse'); const parsed = await pdf(Buffer.concat(chunks)); const matches = parsed.text.match(new RegExp(emailPattern.source, 'gi')) ?? [];

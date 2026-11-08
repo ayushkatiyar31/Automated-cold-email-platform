@@ -20,7 +20,7 @@ app.use(helmet());
 const writeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: true, legacyHeaders: false });
 app.use(cors({
   origin(origin, callback) {
-    const allowed = env.frontendUrl.split(',').map(value => value.trim()).filter(Boolean);
+    const allowed = env.frontendUrls;
     if (!origin || allowed.includes(origin)) callback(null, true);
     else callback(new Error('Origin is not allowed by CORS'));
   },

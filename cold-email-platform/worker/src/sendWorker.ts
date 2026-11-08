@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+dotenv.config();
 import crypto from 'crypto';
 import { google } from 'googleapis';
 import { Worker, Queue } from 'bullmq';

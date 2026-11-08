@@ -29,6 +29,8 @@ Put the hex value in `TOKEN_ENCRYPTION_KEY`. Put separate random strings in the 
 2. Configure the OAuth consent screen with Gmail scope `https://www.googleapis.com/auth/gmail.send`, `openid`, and `email`.
 3. Create a Web OAuth client.
 4. Add `http://localhost:4000/api/gmail/callback` as an authorized redirect URI.
+
+For an app in Google OAuth testing mode, add each Gmail account that will connect in Google Cloud Console under **Google Auth Platform > Audience > Test users**. Testing-only OAuth apps can reject users who are not listed with `Error 403: access_denied`. Publish or verify the app before allowing Gmail users outside the test-user list.
 5. Set the client ID, secret, redirect URI, and required secrets in `.env`.
 
 ## Run
