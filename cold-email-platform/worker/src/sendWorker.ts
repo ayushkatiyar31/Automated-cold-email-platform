@@ -9,6 +9,7 @@ import { Campaign, Recipient, User, EmailLog } from './models';
 
 const log = pino();
 const redisUrl = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
+const CAMPAIGN_SEND_QUEUE_NAME = 'campaign-send';
 const key = Buffer.from(process.env.TOKEN_ENCRYPTION_KEY ?? '', 'hex');
 
 function decrypt(value: string) {
@@ -97,7 +98,7 @@ async function sendCampaignJob(campaignId: string) {
       if (kind === 'transient') {
         const delay = Math.min(60 * 60 * 1000, 5000 * (2 ** Math.min(recipient.attempts, 8)));
         await Recipient.updateOne({ _id: recipient._id }, { $set: { status: 'pending', error: error.message, errorCode: 'TRANSIENT', nextAttemptAt: new Date(Date.now() + delay) } });
-        await new Queue('campaign-send', { connection: { url: redisUrl } }).add('send-campaign', { campaignId }, { delay, jobId: `campaign:${campaignId}`, removeOnComplete: true });
+        await new Queue(CAMPAIGN_SEND_QUEUE_NAME, { connection: { url: redisUrl } }).add('send-campaign', { campaignId }, { delay, jobId: `campaign-${campaignId}`, removeOnComplete: true });
         break;
       }
       await Recipient.updateOne({ _id: recipient._id }, { $set: { status: 'failed', error: error.message, errorCode: kind === 'permanent' ? 'PERMANENT' : 'UNKNOWN' } });
@@ -112,7 +113,7 @@ async function sendCampaignJob(campaignId: string) {
 export async function runSendWorker() {
   await Recipient.updateMany({ status: 'sending', gmailMessageId: { $exists: false }, updatedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }, { $set: { status: 'pending' } });
   const timer = setInterval(async () => { try { await Recipient.updateMany({ status: 'sending', gmailMessageId: { $exists: false }, updatedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }, { $set: { status: 'pending' } }); } catch (error) { log.error(error); } }, 60_000);
-  const worker = new Worker('campaign-send', job => sendCampaignJob(job.data.campaignId), { connection: { url: redisUrl } as any, concurrency: 1 });
+  const worker = new Worker(CAMPAIGN_SEND_QUEUE_NAME, job => sendCampaignJob(job.data.campaignId), { connection: { url: redisUrl } as any, concurrency: 1 });
   worker.on('failed', (job, error) => log.error({ jobId: job?.id, error: error.message }, 'Campaign send failed'));
   const shutdown = async () => { clearInterval(timer); await worker.close(); await mongoose.disconnect(); process.exit(0); };
   process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);

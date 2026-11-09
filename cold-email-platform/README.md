@@ -35,31 +35,50 @@ For an app in Google OAuth testing mode, add each Gmail account that will connec
 
 ## Run
 
-Backend:
+First, make sure MongoDB and Redis are running and that the backend and worker use the same `MONGODB_URI` and `REDIS_URL` values from `.env`. With Docker Desktop:
 
-```cmd
-cd "d:\Automated cold email platform\cold-email-platform\backend"
+```powershell
+Set-Location "D:\Automated cold email platform\cold-email-platform"
+Copy-Item .env.example .env
+docker compose up -d mongo redis
+```
+
+Set the required secrets in `.env` before starting the applications. Then open three separate PowerShell terminals:
+
+Backend (API, port 4000):
+
+```powershell
+Set-Location "D:\Automated cold email platform\cold-email-platform\backend"
 npm install
 npm run dev
 ```
 
-Worker:
+Worker (recipient parsing and campaign jobs):
 
-```cmd
-cd "d:\Automated cold email platform\cold-email-platform\worker"
+```powershell
+Set-Location "D:\Automated cold email platform\cold-email-platform\worker"
 npm install
 npm run dev
 ```
 
-Frontend:
+Frontend (port 3000):
 
-```cmd
-cd "d:\Automated cold email platform\cold-email-platform\frontend"
+```powershell
+Set-Location "D:\Automated cold email platform\cold-email-platform\frontend"
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. Check `http://localhost:4000/api/health` to see whether the parsing worker heartbeat is alive.
+
+Alternatively, run all services in containers from the project directory with `docker compose up --build`.
+
+To run the upload parser checks (a generated multi-sheet XLSX and `sample-recruiters.csv`), run:
+
+```powershell
+Set-Location "D:\Automated cold email platform\cold-email-platform\worker"
+npm run test:upload-parser
+```
 
 ## Using the app
 

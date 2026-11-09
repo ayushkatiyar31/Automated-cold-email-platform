@@ -6,6 +6,7 @@ import rateLimit from 'express-rate-limit';
 import { env } from './config/env';
 import { connectDatabase, disconnectDatabase } from './config/db';
 import { logger } from './config/logger';
+import { PARSE_QUEUE_NAME, WORKER_HEARTBEAT_KEY, parseQueue } from './services/queue';
 import authRoutes from './routes/auth';
 import uploadRoutes from './routes/uploads';
 import recipientRoutes from './routes/recipients';
@@ -31,7 +32,21 @@ app.use(cookieParser());
 app.use(csrfProtection);
 app.use(['/api/campaigns', '/api/templates', '/api/uploads', '/api/recipients'], writeLimiter);
 app.get('/health', (_req, res) => res.json({ ok: true }));
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+app.get('/api/health', async (_req, res) => {
+  try {
+    const heartbeat = await (await parseQueue.client).get(WORKER_HEARTBEAT_KEY);
+    const heartbeatAt = heartbeat ? Number(heartbeat) : null;
+    const alive = heartbeatAt !== null && Number.isFinite(heartbeatAt) && Date.now() - heartbeatAt <= 30_000;
+    res.status(alive ? 200 : 503).json({
+      ok: alive,
+      worker: { alive, lastHeartbeat: heartbeatAt ? new Date(heartbeatAt).toISOString() : null },
+      parseQueue: PARSE_QUEUE_NAME
+    });
+  } catch (error) {
+    logger.error({ error }, 'Worker health check failed');
+    res.status(503).json({ ok: false, worker: { alive: false }, error: 'Worker health check unavailable' });
+  }
+});
 app.use('/api/auth', authRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/recipients', recipientRoutes);

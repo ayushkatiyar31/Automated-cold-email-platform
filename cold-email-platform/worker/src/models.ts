@@ -1,6 +1,20 @@
 import { Schema, model, Types } from 'mongoose';
 
-const uploadSchema = new Schema({ userId: { type: Schema.Types.ObjectId, required: true }, campaignId: { type: Schema.Types.ObjectId, required: true }, originalName: String, gridFsId: { type: Schema.Types.ObjectId, required: true }, status: String, error: String }, { timestamps: true });
+const uploadSchema = new Schema({
+  userId: { type: Schema.Types.ObjectId, required: true },
+  campaignId: { type: Schema.Types.ObjectId, required: true },
+  originalName: String,
+  mimeType: String,
+  size: Number,
+  gridFsId: { type: Schema.Types.ObjectId, required: true },
+  status: { type: String, index: true },
+  error: String,
+  queuedAt: Date,
+  statusChangedAt: Date,
+  rowsScanned: { type: Number, default: 0 },
+  recipientsFound: { type: Number, default: 0 },
+  recipientsInserted: { type: Number, default: 0 }
+}, { timestamps: true });
 export const Upload = model('Upload', uploadSchema);
 
 const recipientSchema = new Schema({ campaignId: { type: Schema.Types.ObjectId, required: true }, userId: { type: Schema.Types.ObjectId, required: true }, email: { type: String, required: true, lowercase: true, trim: true }, name: String, company: String, status: { type: String, enum: ['pending','sending','sent','failed','skipped','invalid'], default: 'pending' }, attempts: { type: Number, default: 0 }, error: String, errorCode: String, gmailMessageId: String, sentAt: Date, nextAttemptAt: Date, idempotencyKey: { type: String, required: true }, updatedAt: Date }, { timestamps: true });

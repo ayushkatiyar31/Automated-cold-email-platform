@@ -97,9 +97,18 @@ router.post('/:id/launch', async (req, res, next) => {
     if (!campaign.subject || !campaign.body) throw new AppError(400, 'Campaign subject and body are required', 'CAMPAIGN_INCOMPLETE');
     const pendingCount = await Recipient.countDocuments({ campaignId: campaign.id, status: 'pending', gmailMessageId: { $exists: false } });
     if (pendingCount === 0) throw new AppError(400, 'Campaign has no pending recipients', 'NO_PENDING_RECIPIENTS');
+    const previousStatus = campaign.status;
+    const previousPauseReason = campaign.pauseReason;
     campaign.status = 'pending'; campaign.pauseReason = undefined; await campaign.save();
     await Recipient.updateMany({ campaignId: campaign.id, status: { $in: ['failed'] } }, { $unset: { error: 1, errorCode: 1 } });
-    await sendCampaign(campaign.id);
+    try {
+      await sendCampaign(campaign.id);
+    } catch (error) {
+      campaign.status = previousStatus;
+      campaign.pauseReason = previousPauseReason;
+      await campaign.save();
+      throw error;
+    }
     res.json({ campaign });
   } catch (error) { next(error); }
 });
