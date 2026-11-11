@@ -43,7 +43,17 @@ Copy-Item .env.example .env
 docker compose up -d mongo redis
 ```
 
-Set the required secrets in `.env` before starting the applications. Then open three separate PowerShell terminals:
+Set the required secrets in `.env` before starting the applications. Install the backend, worker, and frontend dependencies once, then start all three services together from the project folder. This keeps the recipient worker running alongside the app and automatically restarts it if it exits:
+
+```powershell
+Set-Location "D:\Automated cold email platform\cold-email-platform"
+npm --prefix backend install
+npm --prefix worker install
+npm --prefix frontend install
+npm run dev
+```
+
+Press Ctrl+C to stop all three services. You can also start the services in separate terminals:
 
 Backend (API, port 4000):
 
@@ -71,7 +81,7 @@ npm run dev
 
 Open `http://localhost:3000`. Check `http://localhost:4000/api/health` to see whether the parsing worker heartbeat is alive.
 
-Alternatively, run all services in containers from the project directory with `docker compose up --build`.
+Alternatively, run all services in containers from the project directory with `docker compose up --build`. The worker container restarts automatically if it exits. To start or restart only the recipient processor and its dependencies, run `docker compose up -d --build worker`. The Compose configuration connects containers to MongoDB and Redis by their service names; keep `127.0.0.1` in `.env` for applications you run directly on your host.
 
 To run the upload parser checks (a generated multi-sheet XLSX and `sample-recruiters.csv`), run:
 
