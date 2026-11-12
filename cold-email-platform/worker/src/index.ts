@@ -1,8 +1,20 @@
 import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import { join, resolve } from 'path';
-dotenv.config({ path: resolve(__dirname, '../../.env') });
-dotenv.config({ path: resolve(__dirname, '../../backend/.env') });
-dotenv.config({ path: resolve(__dirname, '../.env') });
+
+const candidatePaths = [
+  resolve(__dirname, '../../.env'),
+  resolve(__dirname, '../../backend/.env'),
+  resolve(__dirname, '../.env'),
+  resolve(__dirname, '../../.env.local')
+].filter((value, index, array) => array.indexOf(value) === index);
+
+for (const envPath of candidatePaths) {
+  if (existsSync(envPath)) {
+    dotenv.config({ path: envPath, override: false });
+  }
+}
+
 const sharedMongoUri = process.env.MONGODB_URI ?? 'mongodb://127.0.0.1:27017/cold_email';
 const sharedRedisUrl = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 import mongoose from 'mongoose';

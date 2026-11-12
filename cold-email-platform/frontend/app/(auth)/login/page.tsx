@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 
 export default function Login() {
-  const { register, handleSubmit } = useForm<{ email: string; password: string }>();
+  const { register, handleSubmit } = useForm<{ email: string; password: string; rememberMe: boolean }>();
   const { refreshUser } = useAuth();
   const router = useRouter();
   const [error, setError] = useState('');
@@ -32,6 +32,10 @@ export default function Login() {
         <h1 className="text-2xl font-bold">Welcome back</h1>
         <input {...register('email')} type="email" required autoComplete="email" placeholder="Email" className="mt-4 w-full rounded-lg border px-3 py-3" />
         <input {...register('password')} type="password" required autoComplete="current-password" placeholder="Password" className="mt-4 w-full rounded-lg border px-3 py-3" />
+        <label className="mt-4 flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" {...register('rememberMe')} defaultChecked />
+          Keep me signed in
+        </label>
         {error && <p role="alert" className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
         <button disabled={submitting} className="mt-5 w-full rounded-lg bg-indigo-600 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60">
           {submitting ? 'Signing in...' : 'Sign in'}

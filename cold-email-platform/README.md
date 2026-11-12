@@ -35,15 +35,16 @@ For an app in Google OAuth testing mode, add each Gmail account that will connec
 
 ## Run
 
-First, make sure MongoDB and Redis are running and that the backend and worker use the same `MONGODB_URI` and `REDIS_URL` values from `.env`. With Docker Desktop:
+First, make sure MongoDB and Redis are running and that the backend and worker use the same `MONGODB_URI` and `REDIS_URL` values from the project-root `.env`. The app now prefers the root `.env` over any stale service-local `.env` files, so local development defaults to `mongodb://127.0.0.1:27017/cold_email` and `redis://127.0.0.1:6379` unless you explicitly override them.
 
+With Docker Desktop:
 ```powershell
 Set-Location "D:\Automated cold email platform\cold-email-platform"
 Copy-Item .env.example .env
 docker compose up -d mongo redis
 ```
 
-Set the required secrets in `.env` before starting the applications. Install the backend, worker, and frontend dependencies once, then start all three services together from the project folder. This keeps the recipient worker running alongside the app and automatically restarts it if it exits:
+Set the required secrets in `.env` before starting the applications. Install the backend, worker, and frontend dependencies once, then start all three services together from the project folder. The development launcher keeps the backend and recipient worker running and retries either service if it exits, for example when MongoDB or Redis is temporarily unavailable:
 
 ```powershell
 Set-Location "D:\Automated cold email platform\cold-email-platform"
@@ -81,7 +82,7 @@ npm run dev
 
 Open `http://localhost:3000`. Check `http://localhost:4000/api/health` to see whether the parsing worker heartbeat is alive.
 
-Alternatively, run all services in containers from the project directory with `docker compose up --build`. The worker container restarts automatically if it exits. To start or restart only the recipient processor and its dependencies, run `docker compose up -d --build worker`. The Compose configuration connects containers to MongoDB and Redis by their service names; keep `127.0.0.1` in `.env` for applications you run directly on your host.
+Alternatively, run all services in containers from the project directory with `docker compose up --build`. The backend and worker containers restart automatically if they exit. To start or restart only the recipient processor and its dependencies, run `docker compose up -d --build worker`. The Compose configuration connects containers to MongoDB and Redis by their service names; keep `127.0.0.1` in `.env` for applications you run directly on your host.
 
 To run the upload parser checks (a generated multi-sheet XLSX and `sample-recruiters.csv`), run:
 

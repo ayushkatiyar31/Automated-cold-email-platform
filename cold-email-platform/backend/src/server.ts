@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
-import { env } from './config/env';
+import { env, validateGoogleOAuthConfig } from './config/env';
 import { connectDatabase, disconnectDatabase } from './config/db';
 import { logger } from './config/logger';
 import { PARSE_QUEUE_NAME, WORKER_HEARTBEAT_KEY, parseQueue } from './services/queue';
@@ -57,6 +57,7 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 async function start() {
+  validateGoogleOAuthConfig();
   await connectDatabase();
   logger.info('MongoDB connected');
   const server = app.listen(env.port, () => logger.info({ port: env.port }, `API listening on port ${env.port}`));

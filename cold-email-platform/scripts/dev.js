@@ -8,7 +8,8 @@ const services = [
     name: 'backend',
     cwd: path.join(root, 'backend'),
     entry: path.join(root, 'backend', 'node_modules', 'tsx', 'dist', 'cli.mjs'),
-    args: ['watch', 'src/server.ts']
+    args: ['src/server.ts'],
+    restart: true
   },
   {
     name: 'worker',
@@ -36,7 +37,7 @@ const restartDelays = [1000, 2000, 5000, 10000, 30000];
 const restartAttempts = new Map();
 let stopping = false;
 let exitCode = 0;
-let restartTimer;
+const restartTimers = new Map();
 let killTimer;
 
 function finishShutdown() {
@@ -49,7 +50,8 @@ function shutdown(code) {
   if (stopping) return;
   stopping = true;
   exitCode = code;
-  clearTimeout(restartTimer);
+  for (const timer of restartTimers.values()) clearTimeout(timer);
+  restartTimers.clear();
   for (const child of children.values()) child.kill('SIGTERM');
   killTimer = setTimeout(() => {
     for (const child of children.values()) child.kill('SIGKILL');
@@ -58,12 +60,16 @@ function shutdown(code) {
   finishShutdown();
 }
 
-function scheduleWorkerRestart(service, startedAt) {
-  const attempts = Date.now() - startedAt >= 30000 ? 0 : (restartAttempts.get(service.name) ?? 0) + 1;
+function scheduleServiceRestart(service, startedAt) {
+  const attempts = Date.now() - startedAt >= 60000 ? 1 : (restartAttempts.get(service.name) ?? 0) + 1;
   restartAttempts.set(service.name, attempts);
   const delay = restartDelays[Math.min(attempts - 1, restartDelays.length - 1)];
-  console.error(`Worker exited unexpectedly; restarting in ${delay / 1000}s.`);
-  restartTimer = setTimeout(() => startService(service), delay);
+  console.error(`${service.name} exited unexpectedly; restarting in ${delay / 1000}s.`);
+  const timer = setTimeout(() => {
+    restartTimers.delete(service.name);
+    startService(service);
+  }, delay);
+  restartTimers.set(service.name, timer);
 }
 
 function startService(service) {
@@ -89,7 +95,7 @@ function startService(service) {
     } else if (signal === 'SIGINT' || code === 130) {
       shutdown(0);
     } else if (service.restart) {
-      scheduleWorkerRestart(service, startedAt);
+      scheduleServiceRestart(service, startedAt);
     } else {
       console.error(`${service.name} exited unexpectedly (code ${code ?? 'none'}, signal ${signal ?? 'none'}).`);
       shutdown(code || 1);

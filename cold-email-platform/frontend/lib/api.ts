@@ -7,7 +7,7 @@ async function rawRequest(path: string, options: RequestInit = {}, retried = fal
       headers: { 'X-Requested-With': 'XMLHttpRequest', ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...options.headers }
     });
   } catch {
-    throw new Error('Unable to reach the server. Please try again.');
+    throw new Error(`Unable to reach the API server at ${API_URL}. Start the backend and confirm its MongoDB connection, then try again.`);
   }
   if (response.status === 401 && !retried && path !== '/api/auth/refresh') {
     const refresh = await rawRequest('/api/auth/refresh', { method: 'POST' }, true);

@@ -1,29 +1,55 @@
 import dotenv from 'dotenv';
+import { existsSync } from 'fs';
 import { resolve } from 'path';
-dotenv.config({ path: resolve(__dirname, '../../../.env') });
-dotenv.config({ path: resolve(__dirname, '../../.env') });
 
-const required = (key: string, fallback?: string) => {
-  const value = process.env[key] ?? fallback;
-  if (!value) throw new Error(`Missing required environment variable: ${key}`);
+const backendEnvPath = resolve(__dirname, '../../.env');
+const projectEnvPath = resolve(__dirname, '../../../.env');
+const localEnvPath = resolve(__dirname, '../../.env.local');
+
+for (const envPath of [backendEnvPath, projectEnvPath, localEnvPath]) {
+  if (existsSync(envPath)) {
+    const parsed = dotenv.config({ path: envPath, override: false });
+    if (parsed.error) {
+      console.warn(`Unable to load .env from ${envPath}: ${parsed.error.message}`);
+    }
+  }
+}
+
+const readEnv = (key: string, fallback?: string) => {
+  const value = process.env[key]?.trim() ?? fallback?.trim();
+  if (!value) {
+    if (fallback === undefined) {
+      throw new Error(`Missing required environment variable: ${key}`);
+    }
+    return fallback;
+  }
   return value;
 };
 
+export const validateGoogleOAuthConfig = () => {
+  const loaded = !!readEnv('GOOGLE_CLIENT_ID', '').trim();
+  console.info(`GOOGLE_CLIENT_ID loaded: ${loaded}`);
+  if (!loaded) {
+    throw new Error('Missing required GOOGLE_CLIENT_ID environment variable for Gmail OAuth. Set GOOGLE_CLIENT_ID in backend/.env and restart the backend.');
+  }
+  return loaded;
+};
+
 export const env = {
-  nodeEnv: process.env.NODE_ENV ?? 'development',
-  port: Number(process.env.PORT ?? 4000),
-  mongodbUri: required('MONGODB_URI', 'mongodb://127.0.0.1:27017/cold_email'),
-  redisUrl: required('REDIS_URL', 'redis://127.0.0.1:6379'),
-  frontendUrl: required('FRONTEND_URL', 'http://localhost:3000').split(',').map(value => value.trim())[0],
-  frontendUrls: required('FRONTEND_URL', 'http://localhost:3000').split(',').map(value => value.trim()).filter(Boolean),
-  jwtAccessSecret: required('JWT_ACCESS_SECRET'),
-  jwtRefreshSecret: required('JWT_REFRESH_SECRET'),
-  accessExpires: process.env.JWT_ACCESS_EXPIRES ?? '15m',
-  refreshExpires: process.env.JWT_REFRESH_EXPIRES ?? '7d',
-  encryptionKey: required('TOKEN_ENCRYPTION_KEY'),
-  oauthStateSecret: required('OAUTH_STATE_SECRET'),
-  googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
-  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
-  googleRedirectUri: process.env.GOOGLE_REDIRECT_URI ?? 'http://localhost:4000/api/auth/google/callback',
-  maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES ?? 10485760)
+  nodeEnv: readEnv('NODE_ENV', 'development'),
+  port: Number(readEnv('PORT', '4000')),
+  mongodbUri: readEnv('MONGODB_URI', 'mongodb://127.0.0.1:27017/cold_email'),
+  redisUrl: readEnv('REDIS_URL', 'redis://127.0.0.1:6379'),
+  frontendUrl: readEnv('FRONTEND_URL', 'http://localhost:3000').split(',').map(value => value.trim())[0],
+  frontendUrls: readEnv('FRONTEND_URL', 'http://localhost:3000').split(',').map(value => value.trim()).filter(Boolean),
+  jwtAccessSecret: readEnv('JWT_ACCESS_SECRET'),
+  jwtRefreshSecret: readEnv('JWT_REFRESH_SECRET'),
+  accessExpires: readEnv('JWT_ACCESS_EXPIRES', '15m'),
+  refreshExpires: readEnv('JWT_REFRESH_EXPIRES', '7d'),
+  encryptionKey: readEnv('TOKEN_ENCRYPTION_KEY'),
+  oauthStateSecret: readEnv('OAUTH_STATE_SECRET'),
+  googleClientId: readEnv('GOOGLE_CLIENT_ID', ''),
+  googleClientSecret: readEnv('GOOGLE_CLIENT_SECRET', ''),
+  googleRedirectUri: readEnv('GOOGLE_REDIRECT_URI', 'http://localhost:4000/api/gmail/callback'),
+  maxUploadBytes: Number(readEnv('MAX_UPLOAD_BYTES', '10485760'))
 };
