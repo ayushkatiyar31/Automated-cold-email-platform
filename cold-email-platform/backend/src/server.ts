@@ -3,10 +3,14 @@ import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import mongoose from 'mongoose';
 import { env, validateGoogleOAuthConfig } from './config/env';
+import { redisConnection } from './config/redis';
 import { connectDatabase, disconnectDatabase } from './config/db';
 import { logger } from './config/logger';
 import { PARSE_QUEUE_NAME, WORKER_HEARTBEAT_KEY, parseQueue } from './services/queue';
+import { campaignQueue } from './services/campaignQueue';
+import { startEmbeddedWorker } from './services/embeddedWorker';
 import authRoutes from './routes/auth';
 import uploadRoutes from './routes/uploads';
 import recipientRoutes from './routes/recipients';
@@ -60,13 +64,25 @@ async function start() {
   validateGoogleOAuthConfig();
   await connectDatabase();
   logger.info('MongoDB connected');
+  const embeddedWorker = env.runWorker
+    ? await startEmbeddedWorker({ database: mongoose, redisConnection, parseQueue })
+    : undefined;
+  if (embeddedWorker) logger.info('Embedded queue worker started');
   const server = app.listen(env.port, () => logger.info({ port: env.port }, `API listening on port ${env.port}`));
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.once(signal, () => {
       server.close(async () => {
-        await disconnectDatabase();
-        logger.info({ signal }, 'API stopped gracefully');
-        process.exit(0);
+        try {
+          await embeddedWorker?.close();
+          await parseQueue.close();
+          await campaignQueue.close();
+          await disconnectDatabase();
+          logger.info({ signal }, 'API stopped gracefully');
+          process.exit(0);
+        } catch (error) {
+          logger.error({ error, signal }, 'API shutdown failed');
+          process.exit(1);
+        }
       });
     });
   }

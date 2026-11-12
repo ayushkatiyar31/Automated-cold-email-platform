@@ -3,6 +3,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '..');
+const dotenvModule = path.join(root, 'backend', 'node_modules', 'dotenv');
+if (fs.existsSync(dotenvModule)) {
+  const dotenv = require(dotenvModule);
+  for (const envPath of [path.join(root, 'backend', '.env'), path.join(root, '.env')]) {
+    if (fs.existsSync(envPath)) dotenv.config({ path: envPath, override: false });
+  }
+}
 const services = [
   {
     name: 'backend',
@@ -24,7 +31,7 @@ const services = [
     entry: path.join(root, 'frontend', 'node_modules', 'next', 'dist', 'bin', 'next'),
     args: ['dev']
   }
-];
+].filter(service => !(service.name === 'worker' && process.env.RUN_WORKER?.trim().toLowerCase() === 'true'));
 
 const missing = services.filter(service => !fs.existsSync(service.entry));
 if (missing.length) {

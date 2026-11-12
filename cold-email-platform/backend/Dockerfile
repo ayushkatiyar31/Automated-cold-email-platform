@@ -1,14 +1,18 @@
-FROM node:20-alpine AS deps
+FROM node:20-alpine AS build
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-RUN npm run build
+COPY backend/package*.json ./backend/
+RUN cd backend && npm install
+COPY worker/package*.json ./worker/
+RUN cd worker && npm install
+COPY backend ./backend
+COPY worker ./worker
+RUN cd backend && npm run build
+
 FROM node:20-alpine
-WORKDIR /app
+WORKDIR /app/backend
 ENV NODE_ENV=production
-COPY --from=deps /app/package*.json ./
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/dist ./dist
+COPY --from=build /app/backend/package*.json ./
+COPY --from=build /app/backend/node_modules ./node_modules
+COPY --from=build /app/backend/dist ./dist
 EXPOSE 4000
 CMD ["node", "dist/server.js"]

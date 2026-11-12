@@ -44,7 +44,7 @@ Copy-Item .env.example .env
 docker compose up -d mongo redis
 ```
 
-Set the required secrets in `.env` before starting the applications. Install the backend, worker, and frontend dependencies once, then start all three services together from the project folder. The development launcher keeps the backend and recipient worker running and retries either service if it exits, for example when MongoDB or Redis is temporarily unavailable:
+Set the required secrets in `.env` before starting the applications. Install the backend, worker, and frontend dependencies once, then start the services from the project folder. By default, the development launcher starts the backend and separate worker. Set `RUN_WORKER=true` to run the worker inside the backend process instead; the launcher then skips the separate worker. The launcher retries backend and worker processes if they exit:
 
 ```powershell
 Set-Location "D:\Automated cold email platform\cold-email-platform"
@@ -90,6 +90,17 @@ To run the upload parser checks (a generated multi-sheet XLSX and `sample-recrui
 Set-Location "D:\Automated cold email platform\cold-email-platform\worker"
 npm run test:upload-parser
 ```
+
+## Render single-service deployment
+
+To run the API and BullMQ workers in one Render web service, keep the service root directory at the repository root so the backend build can access the worker package. Use these commands:
+
+```text
+Build: npm install --prefix worker && npm install --prefix backend && npm run build --prefix backend
+Start: npm start --prefix backend
+```
+
+Set `RUN_WORKER=true` in the Render service environment, along with `MONGODB_URI`, `REDIS_URL`, and the other backend environment variables. The backend build bundles the worker runtime into `backend/dist`, while its embedded worker uses the backend's established MongoDB connection and parse queue. Do not start a second worker service for this deployment. Docker Compose keeps `RUN_WORKER=false` and continues to run the standalone `worker` service.
 
 ## Using the app
 

@@ -51,5 +51,6 @@ export const env = {
   googleClientId: readEnv('GOOGLE_CLIENT_ID', ''),
   googleClientSecret: readEnv('GOOGLE_CLIENT_SECRET', ''),
   googleRedirectUri: readEnv('GOOGLE_REDIRECT_URI', 'http://localhost:4000/api/gmail/callback'),
+  runWorker: readEnv('RUN_WORKER', 'false').toLowerCase() === 'true',
   maxUploadBytes: Number(readEnv('MAX_UPLOAD_BYTES', '10485760'))
 };

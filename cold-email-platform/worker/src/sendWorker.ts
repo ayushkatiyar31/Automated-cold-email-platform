@@ -1,25 +1,23 @@
-import mongoose from 'mongoose';
-import dotenv from 'dotenv';
-dotenv.config();
+import type { Types } from 'mongoose';
 import crypto from 'crypto';
 import { google } from 'googleapis';
-import { Worker, Queue } from 'bullmq';
+import { Queue, Worker } from 'bullmq';
+import type { ConnectionOptions } from 'bullmq';
 import pino from 'pino';
-import { Campaign, Recipient, User, EmailLog } from './models';
+import type { WorkerModels } from './models';
 
 const log = pino();
-const redisUrl = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 const CAMPAIGN_SEND_QUEUE_NAME = 'campaign-send';
-const key = Buffer.from(process.env.TOKEN_ENCRYPTION_KEY ?? '', 'hex');
+const encryptionKey = () => Buffer.from(process.env.TOKEN_ENCRYPTION_KEY ?? '', 'hex');
 
 function decrypt(value: string) {
   const [, iv, tag, data] = value.split(':');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64url'));
+  const decipher = crypto.createDecipheriv('aes-256-gcm', encryptionKey(), Buffer.from(iv, 'base64url'));
   decipher.setAuthTag(Buffer.from(tag, 'base64url'));
   return Buffer.concat([decipher.update(Buffer.from(data, 'base64url')), decipher.final()]).toString();
 }
 function encrypt(value: string) {
-  const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', encryptionKey(), iv);
   const encrypted = Buffer.concat([cipher.update(value), cipher.final()]);
   return `v1:${iv.toString('base64url')}:${cipher.getAuthTag().toString('base64url')}:${encrypted.toString('base64url')}`;
 }
@@ -42,7 +40,8 @@ function classify(error: any) {
   if (error?.code >= 500 || ['ECONNRESET','ETIMEDOUT','ENOTFOUND'].includes(error?.code)) return 'transient';
   return 'unknown';
 }
-async function counts(campaignId: mongoose.Types.ObjectId) {
+async function counts(campaignId: Types.ObjectId, models: WorkerModels) {
+  const { Campaign, Recipient } = models;
   const pipeline = await Recipient.aggregate([{ $match: { campaignId } }, { $group: { _id: '$status', count: { $sum: 1 } } }]);
   const result: any = { total: await Recipient.countDocuments({ campaignId }), pending: 0, sending: 0, sent: 0, failed: 0, skipped: 0 };
   for (const row of pipeline) if (row._id in result) result[row._id] = row.count;
@@ -50,7 +49,8 @@ async function counts(campaignId: mongoose.Types.ObjectId) {
   return result;
 }
 
-async function sendCampaignJob(campaignId: string) {
+async function sendCampaignJob(campaignId: string, models: WorkerModels, campaignQueue: Queue) {
+  const { Campaign, Recipient, User, EmailLog } = models;
   const campaign = await Campaign.findById(campaignId);
   if (!campaign || !['pending','paused'].includes(String(campaign.status ?? ''))) return;
   if (campaign.status === 'paused') return;
@@ -98,23 +98,34 @@ async function sendCampaignJob(campaignId: string) {
       if (kind === 'transient') {
         const delay = Math.min(60 * 60 * 1000, 5000 * (2 ** Math.min(recipient.attempts, 8)));
         await Recipient.updateOne({ _id: recipient._id }, { $set: { status: 'pending', error: error.message, errorCode: 'TRANSIENT', nextAttemptAt: new Date(Date.now() + delay) } });
-        await new Queue(CAMPAIGN_SEND_QUEUE_NAME, { connection: { url: redisUrl } }).add('send-campaign', { campaignId }, { delay, jobId: `campaign-${campaignId}`, removeOnComplete: true });
+        await campaignQueue.add('send-campaign', { campaignId }, { delay, jobId: `campaign-${campaignId}`, removeOnComplete: true });
         break;
       }
       await Recipient.updateOne({ _id: recipient._id }, { $set: { status: 'failed', error: error.message, errorCode: kind === 'permanent' ? 'PERMANENT' : 'UNKNOWN' } });
       await EmailLog.updateOne({ campaignId, idempotencyKey: recipient.idempotencyKey }, { $setOnInsert: { userId: recipient.userId, recipientId: recipient._id, recipientEmail: recipient.email, status: 'failed', error: error.message, errorCode: kind, idempotencyKey: recipient.idempotencyKey } }, { upsert: true });
     }
-    await counts(campaign._id);
+    await counts(campaign._id, models);
   }
-  const remaining = await counts(campaign._id);
+  const remaining = await counts(campaign._id, models);
   if (remaining.pending === 0 && remaining.sending === 0) await Campaign.updateOne({ _id: campaignId, status: 'pending' }, { $set: { status: 'sent' } });
 }
 
-export async function runSendWorker() {
+export async function runSendWorker(models: WorkerModels, connection: ConnectionOptions) {
+  const { Recipient } = models;
   await Recipient.updateMany({ status: 'sending', gmailMessageId: { $exists: false }, updatedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }, { $set: { status: 'pending' } });
-  const timer = setInterval(async () => { try { await Recipient.updateMany({ status: 'sending', gmailMessageId: { $exists: false }, updatedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }, { $set: { status: 'pending' } }); } catch (error) { log.error(error); } }, 60_000);
-  const worker = new Worker(CAMPAIGN_SEND_QUEUE_NAME, job => sendCampaignJob(job.data.campaignId), { connection: { url: redisUrl } as any, concurrency: 1 });
+  const campaignQueue = new Queue(CAMPAIGN_SEND_QUEUE_NAME, { connection });
+  let worker: Worker;
+  try {
+    worker = new Worker(CAMPAIGN_SEND_QUEUE_NAME, job => sendCampaignJob(job.data.campaignId, models, campaignQueue), { connection, concurrency: 1 });
+  } catch (error) {
+    await campaignQueue.close();
+    throw error;
+  }
   worker.on('failed', (job, error) => log.error({ jobId: job?.id, error: error.message }, 'Campaign send failed'));
-  const shutdown = async () => { clearInterval(timer); await worker.close(); await mongoose.disconnect(); process.exit(0); };
-  process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
+  const timer = setInterval(async () => { try { await Recipient.updateMany({ status: 'sending', gmailMessageId: { $exists: false }, updatedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }, { $set: { status: 'pending' } }); } catch (error) { log.error(error); } }, 60_000);
+  return async () => {
+    clearInterval(timer);
+    await worker.close();
+    await campaignQueue.close();
+  };
 }
