@@ -104,7 +104,7 @@ Set `RUN_WORKER=true` in the Render service environment, along with `MONGODB_URI
 
 For the deployed Vercel frontend and Render backend, configure both services with their public URLs:
 
-- On Vercel, set `NEXT_PUBLIC_API_URL=https://automated-cold-email-platform-2.onrender.com`. This is a build-time setting; redeploy the frontend after changing it.
+- On Vercel, set `API_PROXY_URL=https://automated-cold-email-platform-2.onrender.com`. This is a build-time setting; redeploy the frontend after changing it. Existing `NEXT_PUBLIC_API_URL` settings are also accepted as a proxy target. The browser calls the Vercel origin, which proxies `/api/*` to Render, keeping the auth cookie first-party.
 - On Render, set `NODE_ENV=production` and `FRONTEND_URL=https://automated-cold-email-platform-cold.vercel.app`. For multiple frontend origins, provide a comma-separated list. Do not use `*`; login uses credentialed requests.
 
 The backend defaults `FRONTEND_URL` to `http://localhost:3000`, so leaving it unset in production will block the deployed frontend. Origins are normalized, so a trailing slash is okay. Production auth cookies use `SameSite=None; Secure`; local development keeps `SameSite=Lax`.
