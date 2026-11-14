@@ -26,6 +26,26 @@ const readEnv = (key: string, fallback?: string) => {
   return value;
 };
 
+const frontendUrls = readEnv('FRONTEND_URL', 'http://localhost:3000')
+  .split(',')
+  .map(value => value.trim())
+  .filter(Boolean)
+  .map(value => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new Error(`Invalid FRONTEND_URL origin: ${value}`);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error(`FRONTEND_URL must use HTTP or HTTPS: ${value}`);
+    }
+    return url.origin;
+  });
+if (frontendUrls.length === 0) {
+  throw new Error('FRONTEND_URL must include at least one HTTP or HTTPS origin');
+}
+
 export const validateGoogleOAuthConfig = () => {
   const loaded = !!readEnv('GOOGLE_CLIENT_ID', '').trim();
   console.info(`GOOGLE_CLIENT_ID loaded: ${loaded}`);
@@ -40,8 +60,8 @@ export const env = {
   port: Number(readEnv('PORT', '4000')),
   mongodbUri: readEnv('MONGODB_URI', 'mongodb://127.0.0.1:27017/cold_email'),
   redisUrl: readEnv('REDIS_URL', 'redis://127.0.0.1:6379'),
-  frontendUrl: readEnv('FRONTEND_URL', 'http://localhost:3000').split(',').map(value => value.trim())[0],
-  frontendUrls: readEnv('FRONTEND_URL', 'http://localhost:3000').split(',').map(value => value.trim()).filter(Boolean),
+  frontendUrl: frontendUrls[0],
+  frontendUrls,
   jwtAccessSecret: readEnv('JWT_ACCESS_SECRET'),
   jwtRefreshSecret: readEnv('JWT_REFRESH_SECRET'),
   accessExpires: readEnv('JWT_ACCESS_EXPIRES', '15m'),

@@ -102,6 +102,13 @@ Start: npm start --prefix backend
 
 Set `RUN_WORKER=true` in the Render service environment, along with `MONGODB_URI`, `REDIS_URL`, and the other backend environment variables. The backend build bundles the worker runtime into `backend/dist`, while its embedded worker uses the backend's established MongoDB connection and parse queue. Do not start a second worker service for this deployment. Docker Compose keeps `RUN_WORKER=false` and continues to run the standalone `worker` service.
 
+For the deployed Vercel frontend and Render backend, configure both services with their public URLs:
+
+- On Vercel, set `NEXT_PUBLIC_API_URL=https://automated-cold-email-platform-2.onrender.com`. This is a build-time setting; redeploy the frontend after changing it.
+- On Render, set `NODE_ENV=production` and `FRONTEND_URL=https://automated-cold-email-platform-cold.vercel.app`. For multiple frontend origins, provide a comma-separated list. Do not use `*`; login uses credentialed requests.
+
+The backend defaults `FRONTEND_URL` to `http://localhost:3000`, so leaving it unset in production will block the deployed frontend. Origins are normalized, so a trailing slash is okay. Production auth cookies use `SameSite=None; Secure`; local development keeps `SameSite=Lax`.
+
 ## Using the app
 
 1. Register and sign in.

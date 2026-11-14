@@ -21,13 +21,14 @@ import { csrfProtection } from './middleware/csrf';
 import { errorHandler, notFoundHandler } from './middleware/error';
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(helmet());
 const writeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: true, legacyHeaders: false });
 app.use(cors({
   origin(origin, callback) {
     const allowed = env.frontendUrls;
     if (!origin || allowed.includes(origin)) callback(null, true);
-    else callback(new Error('Origin is not allowed by CORS'));
+    else callback(null, false);
   },
   credentials: true, allowedHeaders: ['Content-Type', 'X-Requested-With']
 }));

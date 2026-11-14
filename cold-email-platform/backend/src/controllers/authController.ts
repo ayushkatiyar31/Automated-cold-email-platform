@@ -10,7 +10,13 @@ import { AuthRequest } from '../middleware/auth';
 const registerSchema = z.object({ name: z.string().trim().min(2).max(80), email: z.string().trim().email().transform(v => v.toLowerCase()), password: z.string().min(8).max(72), rememberMe: z.boolean().optional().default(false) });
 const loginSchema = z.object({ email: z.string().trim().email().transform(v => v.toLowerCase()), password: z.string().min(1).max(72), rememberMe: z.boolean().optional().default(false) });
 const profileSchema = z.object({ name: z.string().trim().min(2).max(80).optional(), resumeLink: z.string().url().max(2048).optional().or(z.literal('')) });
-const cookieBase = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' as const, path: '/' };
+const production = process.env.NODE_ENV === 'production';
+const cookieBase = {
+  httpOnly: true,
+  secure: production,
+  sameSite: production ? 'none' as const : 'lax' as const,
+  path: '/'
+};
 const setAuthCookies = (res: any, access: string, refresh: string, rememberMe = false) => {
   res.cookie('access_token', access, { ...cookieBase, maxAge: 15 * 60 * 1000 });
   res.cookie('refresh_token', refresh, { ...cookieBase, maxAge: rememberMe ? 30 * 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000 });
