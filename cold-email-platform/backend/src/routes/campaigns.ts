@@ -9,6 +9,7 @@ import { assertOwner, objectId } from '../utils/ownership';
 import { sendOneEmail } from '../services/sendGmail';
 import { Template } from '../models/Template';
 import { Recipient } from '../models/Recipient';
+import { EmailLog } from '../models/EmailLog';
 import { renderCampaign, validatePlaceholders } from '../services/templateRenderer';
 import { sendCampaign } from '../services/campaignQueue';
 import { exportRecipients, exportReport } from '../controllers/campaignExportController';
@@ -73,7 +74,7 @@ router.delete('/:id', async (req, res, next) => {
     if (['pending', 'sending'].includes(campaign.status)) throw new AppError(409, 'Running or queued campaigns cannot be deleted', 'CAMPAIGN_ACTIVE');
     await Promise.all([
       Recipient.deleteMany({ campaignId: campaign.id }),
-      import('../models/EmailLog').then(({ EmailLog }) => EmailLog.deleteMany({ campaignId: campaign.id }))
+      EmailLog.deleteMany({ campaignId: campaign.id })
     ]);
     await campaign.deleteOne(); res.status(204).send();
   }
