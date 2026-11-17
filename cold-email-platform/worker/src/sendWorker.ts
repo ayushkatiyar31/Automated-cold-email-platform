@@ -8,6 +8,8 @@ import type { WorkerModels } from './models';
 
 const log = pino();
 const CAMPAIGN_SEND_QUEUE_NAME = 'campaign-send';
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SEND_DELAY_MS = 1000;
 const encryptionKey = () => Buffer.from(process.env.TOKEN_ENCRYPTION_KEY ?? '', 'hex');
 
 function decrypt(value: string) {
@@ -36,7 +38,7 @@ function classify(error: any) {
   const text = JSON.stringify(error?.response?.data ?? error) + String(error?.message ?? '');
   if (/invalid_grant/i.test(text)) return 'auth';
   if (/invalidAddress|invalidRecipient/i.test(text)) return 'permanent';
-  if (error?.code === 429 || /rateLimitExceeded|userRateLimitExceeded|dailyLimitExceeded/i.test(text)) return 'quota';
+  if (Number(error?.response?.status ?? error?.code) === 429 || /rateLimitExceeded|userRateLimitExceeded|dailyLimitExceeded|rate.?limit/i.test(text)) return 'quota';
   if (error?.code >= 500 || ['ECONNRESET','ETIMEDOUT','ENOTFOUND'].includes(error?.code)) return 'transient';
   return 'unknown';
 }
@@ -49,11 +51,79 @@ async function counts(campaignId: Types.ObjectId, models: WorkerModels) {
   return result;
 }
 
-async function sendCampaignJob(campaignId: string, models: WorkerModels, campaignQueue: Queue) {
-  const { Campaign, Recipient, User, EmailLog } = models;
-  const campaign = await Campaign.findById(campaignId);
-  if (!campaign || !['pending','paused'].includes(String(campaign.status ?? ''))) return;
-  if (campaign.status === 'paused') return;
+async function getQuotaWindow(userId: Types.ObjectId, models: WorkerModels) {
+  const { SendQuota, EmailLog } = models;
+  const now = new Date();
+  let quota = await SendQuota.findOne({ userId });
+  if (!quota) {
+    const recentFilter = { userId, status: 'sent', createdAt: { $gte: new Date(now.getTime() - DAY_MS) } };
+    const [firstRecentSend, sentCount] = await Promise.all([
+      EmailLog.findOne(recentFilter).sort({ createdAt: 1 }).select('createdAt'),
+      EmailLog.countDocuments(recentFilter)
+    ]);
+    await SendQuota.updateOne({ userId }, {
+      $setOnInsert: { windowStartedAt: firstRecentSend?.createdAt ?? now, sentCount }
+    }, { upsert: true });
+    quota = await SendQuota.findOne({ userId });
+  }
+  if (!quota) throw new Error(`Unable to initialize send quota for user ${userId}`);
+  if (quota.windowStartedAt.getTime() + DAY_MS <= now.getTime()) {
+    await SendQuota.updateOne(
+      { userId, windowStartedAt: quota.windowStartedAt },
+      { $set: { windowStartedAt: now, sentCount: 0 } }
+    );
+    quota = await SendQuota.findOne({ userId });
+  }
+  if (!quota) throw new Error(`Unable to load send quota for user ${userId}`);
+  return quota;
+}
+
+async function scheduleQuotaResume(campaignId: string, resumeAt: Date, campaignQueue: Queue) {
+  await campaignQueue.add('send-campaign', { campaignId, autoResume: true }, {
+    jobId: `campaign-${campaignId}-quota-${resumeAt.getTime()}-${Date.now()}`,
+    delay: Math.max(0, resumeAt.getTime() - Date.now()),
+    removeOnComplete: true,
+    attempts: 1
+  });
+}
+
+async function pauseForQuota(campaignId: string, recipientId: Types.ObjectId | undefined, resumeAt: Date, models: WorkerModels, campaignQueue: Queue) {
+  const { Campaign, Recipient } = models;
+  await Campaign.updateOne({ _id: campaignId }, {
+    $set: { status: 'paused', pauseReason: 'waiting for quota', quotaResumeAt: resumeAt }
+  });
+  if (recipientId) {
+    await Recipient.updateOne({ _id: recipientId }, {
+      $set: { status: 'pending', nextAttemptAt: resumeAt },
+      $unset: { error: 1, errorCode: 1 }
+    });
+  }
+  await scheduleQuotaResume(campaignId, resumeAt, campaignQueue);
+}
+
+async function sendCampaignJob(campaignId: string, models: WorkerModels, campaignQueue: Queue, dailySendLimit: number, autoResume = false) {
+  const { Campaign, Recipient, User, EmailLog, SendQuota } = models;
+  let campaign = await Campaign.findById(campaignId);
+  if (!campaign) return;
+  if (autoResume) {
+    if (campaign.status !== 'paused' || campaign.pauseReason !== 'waiting for quota') return;
+    const resumeAt = campaign.quotaResumeAt?.getTime() ?? 0;
+    if (resumeAt > Date.now()) {
+      await scheduleQuotaResume(campaignId, new Date(resumeAt), campaignQueue);
+      return;
+    }
+    const resumed = await Campaign.updateOne({
+      _id: campaignId,
+      status: 'paused',
+      pauseReason: 'waiting for quota',
+      quotaResumeAt: { $lte: new Date() }
+    }, { $set: { status: 'pending' }, $unset: { pauseReason: 1, quotaResumeAt: 1 } });
+    if (!resumed.modifiedCount) return;
+    campaign = await Campaign.findById(campaignId);
+  } else if (campaign.status !== 'pending') {
+    return;
+  }
+  if (!campaign || campaign.status !== 'pending') return;
   const user = await User.findById(campaign.userId).select('+gmail.accessToken +gmail.refreshToken');
   if (!user?.gmail?.refreshToken) { campaign.status = 'paused'; campaign.pauseReason = 'Gmail reconnect required'; await campaign.save(); return; }
   const oauth = new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET);
@@ -68,8 +138,14 @@ async function sendCampaignJob(campaignId: string, models: WorkerModels, campaig
   while (true) {
     const current = await Campaign.findById(campaignId);
     if (!current || current.status !== 'pending') break;
+    const quota = await getQuotaWindow(user.id, models);
+    if (quota.sentCount >= dailySendLimit) {
+      await pauseForQuota(campaignId, undefined, new Date(quota.windowStartedAt.getTime() + DAY_MS), models, campaignQueue);
+      break;
+    }
     const recipient = await Recipient.findOneAndUpdate({ campaignId, status: 'pending', nextAttemptAt: { $not: { $gt: new Date() } }, gmailMessageId: { $exists: false } }, { $set: { status: 'sending' }, $inc: { attempts: 1 } }, { new: true });
     if (!recipient) break;
+    let sent = false;
     try {
       const rendered = render(current, recipient, String(user.name ?? ''));
       const boundary = `b_${crypto.randomBytes(12).toString('hex')}`;
@@ -81,8 +157,10 @@ async function sendCampaignJob(campaignId: string, models: WorkerModels, campaig
       ].join('\r\n');
       const gmail = google.gmail({ version: 'v1', auth: oauth });
       const result = await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(message).toString('base64url') } });
+      await SendQuota.updateOne({ userId: user.id }, { $inc: { sentCount: 1 } });
       await Recipient.updateOne({ _id: recipient._id, status: 'sending' }, { $set: { status: 'sent', sentAt: new Date(), gmailMessageId: result.data.id }, $unset: { error: 1, errorCode: 1 } });
       await EmailLog.updateOne({ campaignId, idempotencyKey: recipient.idempotencyKey }, { $setOnInsert: { userId: recipient.userId, recipientId: recipient._id, recipientEmail: recipient.email, providerMessageId: result.data.id, status: 'sent', idempotencyKey: recipient.idempotencyKey } }, { upsert: true });
+      sent = true;
     } catch (error: any) {
       const kind = classify(error);
       if (kind === 'auth') {
@@ -91,8 +169,7 @@ async function sendCampaignJob(campaignId: string, models: WorkerModels, campaig
         break;
       }
       if (kind === 'quota') {
-        await Campaign.updateOne({ _id: campaignId }, { $set: { status: 'paused', pauseReason: 'quota reached' } });
-        await Recipient.updateOne({ _id: recipient._id }, { $set: { status: 'pending', nextAttemptAt: new Date(Date.now() + 15 * 60 * 1000) } });
+        await pauseForQuota(campaignId, recipient._id, new Date(quota.windowStartedAt.getTime() + DAY_MS), models, campaignQueue);
         break;
       }
       if (kind === 'transient') {
@@ -105,6 +182,7 @@ async function sendCampaignJob(campaignId: string, models: WorkerModels, campaig
       await EmailLog.updateOne({ campaignId, idempotencyKey: recipient.idempotencyKey }, { $setOnInsert: { userId: recipient.userId, recipientId: recipient._id, recipientEmail: recipient.email, status: 'failed', error: error.message, errorCode: kind, idempotencyKey: recipient.idempotencyKey } }, { upsert: true });
     }
     await counts(campaign._id, models);
+    if (sent) await new Promise(resolve => setTimeout(resolve, SEND_DELAY_MS));
   }
   const remaining = await counts(campaign._id, models);
   if (remaining.pending === 0 && remaining.sending === 0) await Campaign.updateOne({ _id: campaignId, status: 'pending' }, { $set: { status: 'sent' } });
@@ -112,11 +190,13 @@ async function sendCampaignJob(campaignId: string, models: WorkerModels, campaig
 
 export async function runSendWorker(models: WorkerModels, connection: ConnectionOptions) {
   const { Recipient } = models;
+  const dailySendLimit = Number(process.env.DAILY_SEND_LIMIT ?? 450);
+  if (!Number.isInteger(dailySendLimit) || dailySendLimit < 1) throw new Error('DAILY_SEND_LIMIT must be a positive integer');
   await Recipient.updateMany({ status: 'sending', gmailMessageId: { $exists: false }, updatedAt: { $lt: new Date(Date.now() - 5 * 60 * 1000) } }, { $set: { status: 'pending' } });
   const campaignQueue = new Queue(CAMPAIGN_SEND_QUEUE_NAME, { connection });
   let worker: Worker;
   try {
-    worker = new Worker(CAMPAIGN_SEND_QUEUE_NAME, job => sendCampaignJob(job.data.campaignId, models, campaignQueue), { connection, concurrency: 1 });
+    worker = new Worker(CAMPAIGN_SEND_QUEUE_NAME, job => sendCampaignJob(job.data.campaignId, models, campaignQueue, dailySendLimit, job.data.autoResume === true), { connection, concurrency: 1 });
   } catch (error) {
     await campaignQueue.close();
     throw error;

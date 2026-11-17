@@ -10,6 +10,8 @@ import { sendOneEmail } from '../services/sendGmail';
 import { Template } from '../models/Template';
 import { Recipient } from '../models/Recipient';
 import { EmailLog } from '../models/EmailLog';
+import { SendQuota } from '../models/SendQuota';
+import { env } from '../config/env';
 import { renderCampaign, validatePlaceholders } from '../services/templateRenderer';
 import { sendCampaign } from '../services/campaignQueue';
 import { exportRecipients, exportReport } from '../controllers/campaignExportController';
@@ -55,7 +57,39 @@ router.post('/from-template/:templateId', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 router.get('/:id', async (req, res, next) => {
-  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); res.json({ campaign }); }
+  try {
+    const campaign = await Campaign.findById(objectId(req.params.id));
+    if (!campaign) throw notFound('Campaign not found');
+    assertOwner(campaign.userId, (req as AuthRequest).user!.id);
+    const [remainingCount, quota] = await Promise.all([
+      Recipient.countDocuments({ campaignId: campaign.id, status: { $in: ['pending', 'sending'] } }),
+      SendQuota.findOne({ userId: campaign.userId })
+    ]);
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const activeQuotaWindow = quota && quota.windowStartedAt.getTime() + dayMs > now;
+    const waitingForQuota = campaign.pauseReason === 'waiting for quota' && campaign.quotaResumeAt;
+    let firstSendAt = waitingForQuota ? Math.max(now, campaign.quotaResumeAt!.getTime()) : now;
+    let nextWindowAt = waitingForQuota ? firstSendAt + dayMs : activeQuotaWindow ? quota.windowStartedAt.getTime() + dayMs : now + dayMs;
+    let available = waitingForQuota || !activeQuotaWindow ? env.dailySendLimit : Math.max(0, env.dailySendLimit - quota.sentCount);
+    if (available === 0 && activeQuotaWindow) {
+      firstSendAt = quota.windowStartedAt.getTime() + dayMs;
+      available = env.dailySendLimit;
+      nextWindowAt = firstSendAt + dayMs;
+    }
+    let expectedFinishAt: string | null = null;
+    if (remainingCount > 0) {
+      let afterFirstWindow = Math.max(0, remainingCount - available);
+      if (afterFirstWindow === 0) {
+        expectedFinishAt = new Date(firstSendAt + (remainingCount - 1) * 1000).toISOString();
+      } else {
+        const laterWindows = Math.ceil(afterFirstWindow / env.dailySendLimit);
+        const lastWindowSends = afterFirstWindow % env.dailySendLimit || env.dailySendLimit;
+        expectedFinishAt = new Date(nextWindowAt + (laterWindows - 1) * dayMs + (lastWindowSends - 1) * 1000).toISOString();
+      }
+    }
+    res.json({ campaign, remainingCount, expectedFinishAt });
+  }
   catch (error) { next(error); }
 });
 router.get('/:id/export/recipients', exportRecipients);
@@ -100,13 +134,15 @@ router.post('/:id/launch', async (req, res, next) => {
     if (pendingCount === 0) throw new AppError(400, 'Campaign has no pending recipients', 'NO_PENDING_RECIPIENTS');
     const previousStatus = campaign.status;
     const previousPauseReason = campaign.pauseReason;
-    campaign.status = 'pending'; campaign.pauseReason = undefined; await campaign.save();
+    const previousQuotaResumeAt = campaign.quotaResumeAt;
+    campaign.status = 'pending'; campaign.pauseReason = undefined; campaign.quotaResumeAt = undefined; await campaign.save();
     await Recipient.updateMany({ campaignId: campaign.id, status: { $in: ['failed'] } }, { $unset: { error: 1, errorCode: 1 } });
     try {
       await sendCampaign(campaign.id);
     } catch (error) {
       campaign.status = previousStatus;
       campaign.pauseReason = previousPauseReason;
+      campaign.quotaResumeAt = previousQuotaResumeAt;
       await campaign.save();
       throw error;
     }
@@ -114,19 +150,19 @@ router.post('/:id/launch', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 router.post('/:id/pause', async (req, res, next) => {
-  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'paused'; await campaign.save(); res.json({ campaign }); }
+  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'paused'; campaign.pauseReason = undefined; campaign.quotaResumeAt = undefined; await campaign.save(); res.json({ campaign }); }
   catch (error) { next(error); }
 });
 router.post('/:id/resume', async (req, res, next) => {
-  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'pending'; campaign.pauseReason = undefined; await campaign.save(); await sendCampaign(campaign.id); res.json({ campaign }); }
+  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'pending'; campaign.pauseReason = undefined; campaign.quotaResumeAt = undefined; await campaign.save(); await sendCampaign(campaign.id); res.json({ campaign }); }
   catch (error) { next(error); }
 });
 router.post('/:id/cancel', async (req, res, next) => {
-  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'cancelled'; await campaign.save(); await Recipient.updateMany({ campaignId: campaign.id, status: 'pending' }, { $set: { status: 'skipped' } }); res.json({ campaign }); }
+  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); campaign.status = 'cancelled'; campaign.pauseReason = undefined; campaign.quotaResumeAt = undefined; await campaign.save(); await Recipient.updateMany({ campaignId: campaign.id, status: 'pending' }, { $set: { status: 'skipped' } }); res.json({ campaign }); }
   catch (error) { next(error); }
 });
 router.post('/:id/retry-failed', async (req, res, next) => {
-  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); await Recipient.updateMany({ campaignId: campaign.id, status: 'failed', gmailMessageId: { $exists: false }, errorCode: { $ne: 'PERMANENT' } }, { $set: { status: 'pending', attempts: 0 }, $unset: { error: 1, errorCode: 1 } }); campaign.status = 'pending'; campaign.pauseReason = undefined; await campaign.save(); await sendCampaign(campaign.id); res.json({ campaign }); }
+  try { const campaign = await Campaign.findById(objectId(req.params.id)); if (!campaign) throw notFound('Campaign not found'); assertOwner(campaign.userId, (req as AuthRequest).user!.id); await Recipient.updateMany({ campaignId: campaign.id, status: 'failed', gmailMessageId: { $exists: false }, errorCode: { $ne: 'PERMANENT' } }, { $set: { status: 'pending', attempts: 0 }, $unset: { error: 1, errorCode: 1 } }); campaign.status = 'pending'; campaign.pauseReason = undefined; campaign.quotaResumeAt = undefined; await campaign.save(); await sendCampaign(campaign.id); res.json({ campaign }); }
   catch (error) { next(error); }
 });
 router.post('/:id/preview', async (req, res, next) => {

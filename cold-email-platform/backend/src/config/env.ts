@@ -55,6 +55,11 @@ export const validateGoogleOAuthConfig = () => {
   return loaded;
 };
 
+const dailySendLimit = Number(readEnv('DAILY_SEND_LIMIT', '450'));
+if (!Number.isInteger(dailySendLimit) || dailySendLimit < 1) {
+  throw new Error('DAILY_SEND_LIMIT must be a positive integer');
+}
+
 export const env = {
   nodeEnv: readEnv('NODE_ENV', 'development'),
   port: Number(readEnv('PORT', '4000')),
@@ -72,5 +77,6 @@ export const env = {
   googleClientSecret: readEnv('GOOGLE_CLIENT_SECRET', ''),
   googleRedirectUri: readEnv('GOOGLE_REDIRECT_URI', 'http://localhost:4000/api/gmail/callback'),
   runWorker: readEnv('RUN_WORKER', 'false').toLowerCase() === 'true',
-  maxUploadBytes: Number(readEnv('MAX_UPLOAD_BYTES', '10485760'))
+  maxUploadBytes: Number(readEnv('MAX_UPLOAD_BYTES', '10485760')),
+  dailySendLimit
 };

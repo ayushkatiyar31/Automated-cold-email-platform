@@ -116,3 +116,5 @@ The backend defaults `FRONTEND_URL` to `http://localhost:3000`, so leaving it un
 3. Connect Gmail under Settings.
 4. Create or edit templates under Templates.
 5. Create a campaign, upload recipients, review them, compose, confirm, and launch.
+
+Campaign sending is limited to `DAILY_SEND_LIMIT` messages per connected Gmail account in a 24-hour window (default `450`), with a one-second pause between emails. If Gmail reports a quota or rate-limit error, the campaign waits until the current window ends and then resumes automatically. The campaign detail page shows its remaining recipients and estimated finish date.

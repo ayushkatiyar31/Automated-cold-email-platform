@@ -46,6 +46,7 @@ const campaignSchema = new Schema({
   optOutLine: String,
   status: String,
   pauseReason: String,
+  quotaResumeAt: Date,
   counts: Object
 }, { timestamps: true });
 
@@ -68,6 +69,12 @@ const emailLogSchema = new Schema({
 }, { timestamps: true });
 emailLogSchema.index({ campaignId: 1, idempotencyKey: 1 }, { unique: true });
 
+const sendQuotaSchema = new Schema({
+  userId: { type: Schema.Types.ObjectId, required: true, unique: true },
+  windowStartedAt: { type: Date, required: true },
+  sentCount: { type: Number, required: true, default: 0 }
+}, { timestamps: true });
+
 function getModel(instance: Mongoose, name: string, schema: Schema) {
   return instance.models[name] ?? instance.model(name, schema);
 }
@@ -78,7 +85,8 @@ export function createWorkerModels(instance: Mongoose = mongoose) {
     Recipient: getModel(instance, 'Recipient', recipientSchema),
     Campaign: getModel(instance, 'Campaign', campaignSchema),
     User: getModel(instance, 'User', userSchema),
-    EmailLog: getModel(instance, 'EmailLog', emailLogSchema)
+    EmailLog: getModel(instance, 'EmailLog', emailLogSchema),
+    SendQuota: getModel(instance, 'SendQuota', sendQuotaSchema)
   };
 }
 
