@@ -9,6 +9,7 @@ const apiProxyUrl = (
 const nextConfig: NextConfig = {
   async rewrites() {
     return [
+      
       {
         source: '/api/:path*',
         destination: `${apiProxyUrl}/api/:path*`
