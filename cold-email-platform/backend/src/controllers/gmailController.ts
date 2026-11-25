@@ -2,11 +2,22 @@ import { RequestHandler } from 'express';
 import { google } from 'googleapis';
 import { User } from '../models/User';
 import { AuthRequest } from '../middleware/auth';
-import { AppError } from '../utils/errors';
 import { encryptToken, decryptToken } from '../utils/crypto';
 import { createOAuthState, verifyOAuthState } from '../utils/oauthState';
-import { createOAuthClient, gmailScopes, gmailSendScope } from '../services/gmail';
+import { createOAuthClient, gmailSendScope } from '../services/gmail';
 import { env } from '../config/env';
+import { logger } from '../config/logger';
+
+type OAuthErrorReason = 'access_denied' | 'no_refresh_token' | 'invalid_state' | 'exchange_failed' | 'missing_send_permission';
+
+function redirectOAuthError(res: Parameters<RequestHandler>[1], reason: OAuthErrorReason) {
+  res.redirect(`${env.frontendUrl}/settings?gmail=error&reason=${reason}`);
+}
+
+function normalizeScopes(scopes: string | string[] | null | undefined): Set<string> {
+  const values = Array.isArray(scopes) ? scopes : [scopes ?? ''];
+  return new Set(values.flatMap(value => value.split(' ')).map(scope => scope.trim()).filter(Boolean));
+}
 
 export const authUrl: RequestHandler = async (req, res, next) => {
   try {
@@ -14,33 +25,76 @@ export const authUrl: RequestHandler = async (req, res, next) => {
     const oauth = createOAuthClient();
     const url = oauth.generateAuthUrl({
       access_type: 'offline', prompt: 'consent',
-      scope: gmailScopes, state: createOAuthState(user.id), include_granted_scopes: true
+      scope: ['openid', 'email', gmailSendScope], state: createOAuthState(user.id), include_granted_scopes: true
     });
     res.json({ url });
   } catch (error) { next(error); }
 };
 
 export const callback: RequestHandler = async (req, res, next) => {
+  if (req.query.error) {
+    redirectOAuthError(res, req.query.error === 'access_denied' ? 'access_denied' : 'exchange_failed');
+    return;
+  }
+
+  const state = typeof req.query.state === 'string' ? req.query.state : '';
+  let userId: string;
   try {
-    if (req.query.error) {
-      res.redirect(`${env.frontendUrl}/settings?gmail=error&reason=${encodeURIComponent(String(req.query.error_description ?? req.query.error))}`);
-      return;
-    }
-    const state = typeof req.query.state === 'string' ? req.query.state : '';
-    const code = typeof req.query.code === 'string' ? req.query.code : '';
-    const userId = verifyOAuthState(state);
-    if (!code) throw new AppError(400, 'Missing OAuth authorization code', 'INVALID_OAUTH_RESPONSE');
+    userId = verifyOAuthState(state);
+  } catch {
+    redirectOAuthError(res, 'invalid_state');
+    return;
+  }
+
+  const code = typeof req.query.code === 'string' ? req.query.code : '';
+  if (!code) {
+    redirectOAuthError(res, 'exchange_failed');
+    return;
+  }
+
+  try {
     const oauth = createOAuthClient();
     const { tokens } = await oauth.getToken(code);
-    oauth.setCredentials(tokens);
-    const tokenInfo = await google.oauth2({ version: 'v2', auth: oauth }).tokeninfo();
-    const granted = String(tokenInfo.data.scope ?? '').split(/\s+/);
-    if (!granted.includes(gmailSendScope)) {
-      throw new AppError(403, 'Gmail send permission was not granted. Please enable the gmail.send scope.', 'GMAIL_SEND_SCOPE_REQUIRED');
+    if (!tokens.access_token) {
+      redirectOAuthError(res, 'exchange_failed');
+      return;
     }
-    if (!tokens.access_token || !tokens.refresh_token) throw new AppError(400, 'Google did not provide the required refresh token. Revoke access and connect again.', 'OAUTH_TOKENS_REQUIRED');
+
+    let grantedScopes = normalizeScopes(tokens.scope);
+    if (!grantedScopes.has(gmailSendScope)) {
+      try {
+        const tokenInfo = await oauth.getTokenInfo(tokens.access_token);
+        grantedScopes = normalizeScopes(tokenInfo.scopes);
+      } catch {
+        logger.info({ grantedScopes: [...grantedScopes] }, 'Gmail OAuth scopes reported by token response');
+        logger.error('Unable to verify Gmail OAuth scopes using token info');
+        redirectOAuthError(res, 'exchange_failed');
+        return;
+      }
+    }
+    logger.info({ grantedScopes: [...grantedScopes] }, 'Gmail OAuth scopes granted');
+
+    if (!grantedScopes.has(gmailSendScope)) {
+      try {
+        await oauth.revokeToken(tokens.access_token);
+      } catch {
+        logger.warn('Unable to revoke Gmail OAuth token after missing send permission');
+      }
+      redirectOAuthError(res, 'missing_send_permission');
+      return;
+    }
+
+    if (!tokens.refresh_token) {
+      redirectOAuthError(res, 'no_refresh_token');
+      return;
+    }
+
+    oauth.setCredentials(tokens);
     const user = await User.findById(userId).select('+gmail.accessToken +gmail.refreshToken');
-    if (!user) throw new AppError(404, 'User not found', 'NOT_FOUND');
+    if (!user) {
+      redirectOAuthError(res, 'exchange_failed');
+      return;
+    }
     const profile = await google.oauth2({ version: 'v2', auth: oauth }).userinfo.get();
     user.gmail = {
       email: profile.data.email ?? undefined, accessToken: encryptToken(tokens.access_token),
@@ -49,13 +103,9 @@ export const callback: RequestHandler = async (req, res, next) => {
     };
     await user.save();
     res.redirect(`${env.frontendUrl}/settings?gmail=connected`);
-  } catch (error: any) {
-    if (env.frontendUrl) {
-      const reason = error instanceof AppError ? error.message : (error?.message ?? 'OAuth callback failed');
-      res.redirect(`${env.frontendUrl}/settings?gmail=error&reason=${encodeURIComponent(reason)}`);
-      return;
-    }
-    next(error);
+  } catch {
+    logger.error('Gmail OAuth callback failed during token exchange or account setup');
+    redirectOAuthError(res, 'exchange_failed');
   }
 };
 

@@ -33,6 +33,15 @@ Put the hex value in `TOKEN_ENCRYPTION_KEY`. Put separate random strings in the 
 For an app in Google OAuth testing mode, add each Gmail account that will connect in Google Cloud Console under **Google Auth Platform > Audience > Test users**. Testing-only OAuth apps can reject users who are not listed with `Error 403: access_denied`. Publish or verify the app before allowing Gmail users outside the test-user list.
 5. Set the client ID, secret, redirect URI, and required secrets in `.env`.
 
+### Gmail send permission troubleshooting
+
+If Settings reports that the Gmail send permission was not granted, reconnect Gmail and, on Google's consent screen, tick **Send email on your behalf** before continuing. If the checkbox is unavailable or the permission is still missing, verify the Google Cloud configuration:
+
+- **Gmail API** is enabled for the same Google Cloud project as the OAuth client.
+- `openid`, `email`, and `https://www.googleapis.com/auth/gmail.send` are added under **Google Auth Platform > Data Access**.
+- The Google account being used is listed under **Google Auth Platform > Audience > Test users** while the app is in testing mode.
+- The authorized redirect URI exactly matches `GOOGLE_REDIRECT_URI` in `.env`, including scheme, hostname, port, path, and trailing slash (if any).
+
 ## Run
 
 First, make sure MongoDB and Redis are running and that the backend and worker use the same `MONGODB_URI` and `REDIS_URL` values from the project-root `.env`. The app now prefers the root `.env` over any stale service-local `.env` files, so local development defaults to `mongodb://127.0.0.1:27017/cold_email` and `redis://127.0.0.1:6379` unless you explicitly override them.
